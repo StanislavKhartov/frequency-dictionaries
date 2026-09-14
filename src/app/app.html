@@ -1,0 +1,72 @@
+<div class="container">
+  <header>
+    <!-- Переключатель языков -->
+    <div class="lang-tabs">
+      <button 
+        *ngFor="let lang of languages" 
+        [class.active]="selectedLang() === lang.id"
+        (click)="selectLanguage(lang.id)">
+        {{ lang.name }}
+      </button>
+    </div>
+  </header>
+
+  <div *ngIf="isLoading()" class="loader">
+    <p>Загрузка и обработка словаря...</p>
+  </div>
+
+  <main *ngIf="!isLoading()">
+    <div class="stats-grid">
+      <div class="card">
+        <h3>Всего слов слов</h3>
+        <p class="stat-num">{{ currentData().totalTokens | number }}</p>
+      </div>
+      <div class="card">
+        <h3>Уникальных слов</h3>
+        <p class="stat-num">{{ currentData().uniqueTypes | number }}</p>
+      </div>
+      <div class="card">
+        <h3>Найдено по поиску</h3>
+        <p class="stat-num">{{ filteredItems().length | number }}</p>
+      </div>
+    </div>
+
+    <div class="search-bar">
+      <input 
+        type="text" 
+        [ngModel]="searchQuery()" 
+        (ngModelChange)="onSearchChange($event)" 
+        placeholder="Поиск слова..." />
+    </div>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Ранг</th>
+            <th>Слово</th>
+            <th>Абсолютная частота</th>
+            <th>Доля (%)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let item of paginatedItems()">
+            <td>{{ item.rank }}</td>
+            <td class="word-cell"><strong>{{ item.word }}</strong></td>
+            <td>{{ item.count | number }}</td>
+            <td>{{ item.percentage | number:'1.3-3' }}%</td>
+          </tr>
+          <tr *ngIf="paginatedItems().length === 0">
+            <td colspan="4" class="empty-state">Слово не найдено</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pagination">
+      <button [disabled]="currentPage() === 1" (click)="setPage(currentPage() - 1)">Назад</button>
+      <span>Страница {{ currentPage() }} из {{ totalPages() }}</span>
+      <button [disabled]="currentPage() === totalPages()" (click)="setPage(currentPage() + 1)">Вперед</button>
+    </div>
+  </main>
+</div>
