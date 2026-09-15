@@ -43,7 +43,6 @@
       <table>
         <thead>
           <tr>
-            <th>Ранг</th>
             <th>Слово</th>
             <th>Абсолютная частота</th>
             <th>Доля (%)</th>
@@ -51,13 +50,12 @@
         </thead>
         <tbody>
           <tr *ngFor="let item of paginatedItems()">
-            <td>{{ item.rank }}</td>
             <td class="word-cell"><strong>{{ item.word }}</strong></td>
             <td>{{ item.count | number }}</td>
             <td>{{ item.percentage | number:'1.3-3' }}%</td>
           </tr>
           <tr *ngIf="paginatedItems().length === 0">
-            <td colspan="4" class="empty-state">Слово не найдено</td>
+            <td colspan="3" class="empty-state">Слово не найдено</td>
           </tr>
         </tbody>
       </table>
