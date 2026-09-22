@@ -1,44 +1,85 @@
 <div class="container">
   <header>
-    <!-- Переключатель языков -->
-    <div class="lang-tabs">
-      <button 
-        *ngFor="let lang of languages" 
-        [class.active]="selectedLang() === lang.id"
-        (click)="selectLanguage(lang.id)">
-        {{ lang.name }}
-      </button>
+    <h1>Частотные словари (Supabase Cloud DB)</h1>
+
+    <!-- Меню 1: Языки -->
+    <div class="switch-row">
+      <span class="label">Язык:</span>
+      <div class="tabs">
+        <button 
+          *ngFor="let lang of languages" 
+          [class.active]="selectedLang() === lang.id"
+          (click)="selectLanguage(lang.id)">
+          {{ lang.name }}
+        </button>
+      </div>
+    </div>
+
+    <!-- Меню 2: Корпуса (Википедия / Субтитры) -->
+    <div class="switch-row">
+      <span class="label">Корпус:</span>
+      <div class="tabs">
+        <button 
+          *ngFor="let src of sources" 
+          [class.active]="selectedSource() === src.id"
+          (click)="selectSource(src.id)">
+          {{ src.name }}
+        </button>
+      </div>
     </div>
   </header>
 
-  <div *ngIf="isLoading()" class="loader">
-    <p>Загрузка и обработка словаря...</p>
-  </div>
-
-  <main *ngIf="!isLoading()">
+  <main>
+    <!-- Карточки статистики из Supabase -->
     <div class="stats-grid">
       <div class="card">
-        <h3>Всего слов</h3>
-        <p class="stat-num">{{ currentData().totalTokens | number }}</p>
+        <h3>Суммарно словоупотреблений</h3>
+        <p class="stat-num">{{ stats().totalTokens | number }}</p>
+        <span class="badge ok">>= 5,000,000</span>
       </div>
       <div class="card">
-        <h3>Уникальных слов</h3>
-        <p class="stat-num">{{ currentData().uniqueTypes | number }}</p>
+        <h3>Уникальных слов (в словаре)</h3>
+        <p class="stat-num">{{ stats().uniqueWords | number }}</p>
       </div>
       <div class="card">
-        <h3>Найдено по поиску</h3>
-        <p class="stat-num">{{ filteredItems().length | number }}</p>
+        <h3>Найдено по префиксу</h3>
+        <p class="stat-num">{{ totalMatches() | number }}</p>
       </div>
     </div>
 
-    <div class="search-bar">
+    <!-- Поиск с начала слова и кнопка добавления -->
+    <div class="toolbar">
       <input 
         type="text" 
-        [ngModel]="searchQuery()" 
+        [ngModel]="searchPrefix()" 
         (ngModelChange)="onSearchChange($event)" 
-        placeholder="Поиск слова..." />
+        placeholder="🔍 Поиск с начала слова..." />
+      <button class="btn-primary" (click)="showAddModal.set(true)">+ Добавить слово</button>
     </div>
 
+    <!-- Модалка добавления слова -->
+    <div *ngIf="showAddModal()" class="modal-backdrop">
+      <div class="modal">
+        <h3>Добавление слова</h3>
+        <p class="hint">Слово добавится в словарь с частотой 0.</p>
+        <input type="text" [ngModel]="newWordInput()" (ngModelChange)="newWordInput.set($event)" placeholder="Слово..." />
+        <div class="modal-actions">
+          <button (click)="handleAddWord()" class="btn-primary">Сохранить</button>
+          <button (click)="showAddModal.set(false)" class="btn-cancel">Отмена</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Сортировка -->
+    <div class="sort-bar">
+      <span>Сортировка:</span>
+      <button [class.active]="currentSort() === 'freq-desc'" (click)="setSort('freq-desc')">Частота ↓</button>
+      <button [class.active]="currentSort() === 'freq-asc'" (click)="setSort('freq-asc')">Частота ↑</button>
+      <button [class.active]="currentSort() === 'alpha-asc'" (click)="setSort('alpha-asc')">А-Я / A-Z</button>
+      <button [class.active]="currentSort() === 'alpha-desc'" (click)="setSort('alpha-desc')">Я-А / Z-A</button>
+    </div>
+
+    <!-- Таблица -->
     <div class="table-container">
       <table>
         <thead>
@@ -46,25 +87,43 @@
             <th>Слово</th>
             <th>Абсолютная частота</th>
             <th>Доля (%)</th>
+            <th class="actions-th">Действия</th>
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let item of paginatedItems()">
+          <tr *ngFor="let item of words()">
             <td class="word-cell"><strong>{{ item.word }}</strong></td>
             <td>{{ item.count | number }}</td>
-            <td>{{ item.percentage | number:'1.3-3' }}%</td>
+            <td>
+              {{ stats().totalTokens > 0 ? ((item.count / stats().totalTokens) * 100 | number:'1.4-4') : 0 }}%
+            </td>
+            <td class="actions-cell">
+              <button class="btn-action edit" (click)="handleEditWord(item)" title="Исправить написание">✎</button>
+              <button class="btn-action delete" (click)="handleDeleteWord(item)" title="Удалить слово">✕</button>
+            </td>
           </tr>
-          <tr *ngIf="paginatedItems().length === 0">
-            <td colspan="3" class="empty-state">Слово не найдено</td>
+          <tr *ngIf="words().length === 0 && !isLoading()">
+            <td colspan="4" class="empty-state">Слова не найдены</td>
           </tr>
         </tbody>
       </table>
     </div>
 
+    <!-- Пагинация -->
     <div class="pagination">
-      <button [disabled]="currentPage() === 1" (click)="setPage(currentPage() - 1)">Назад</button>
+      <button [disabled]="currentPage() === 1 || isLoading()" (click)="setPage(currentPage() - 1)">Назад</button>
       <span>Страница {{ currentPage() }} из {{ totalPages() }}</span>
-      <button [disabled]="currentPage() === totalPages()" (click)="setPage(currentPage() + 1)">Вперед</button>
+      <button [disabled]="currentPage() === totalPages() || isLoading()" (click)="setPage(currentPage() + 1)">Вперед</button>
     </div>
+
+    <!-- Пополнение новым текстом -->
+    <section class="replenish-section">
+      <h3>Пополнение словаря текстом</h3>
+      <p class="hint">Вставьте текст для пополнения текущего словаря. Частоты слов будут пересчитаны в Supabase.</p>
+      <textarea rows="3" [ngModel]="newText()" (ngModelChange)="newText.set($event)" placeholder="Вставьте фрагмент текста..."></textarea>
+      <button (click)="handleAddText()" [disabled]="!newText().trim() || isLoading()" class="btn-primary">
+        📥 Пополнить и обновить частоты
+      </button>
+    </section>
   </main>
 </div>

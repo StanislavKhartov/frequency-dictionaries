@@ -1,62 +1,9 @@
-import { Component, OnInit, inject, signal, computed, Injectable } from '@angular/core';
+import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { HttpClient } from '@angular/common/http';
-import { Observable, map } from 'rxjs';
-
-
-export interface WordItem {
-  rank: number;
-  word: string;
-  count: number;
-  percentage: number;
-}
-
-export interface DictData {
-  items: WordItem[];
-  totalTokens: number;
-  uniqueTypes: number;
-}
-
-@Injectable({
-  providedIn: 'root'
-})
-export class DictionaryService {
-  private http = inject(HttpClient);
-
-  loadDictionary(filePath: string): Observable<DictData> {
-    return this.http.get(filePath, { responseType: 'text' }).pipe(
-      map(tsvText => this.parseTsv(tsvText))
-    );
-  }
-
-  private parseTsv(text: string): DictData {
-    const lines = text.split('\n');
-    const rawItems: { word: string; count: number }[] = [];
-    let totalTokens = 0;
-
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      const [word, countStr] = line.split('\t');
-      const count = parseInt(countStr, 10);
-      if (word && !isNaN(count)) {
-        rawItems.push({ word, count });
-        totalTokens += count;
-      }
-    }
-
-    const items: WordItem[] = rawItems.map((item, index) => ({
-      rank: index + 1,
-      word: item.word,
-      count: item.count,
-      percentage: totalTokens > 0 ? (item.count / totalTokens) * 100 : 0
-    }));
-
-    return { items, totalTokens, uniqueTypes: items.length };
-  }
-}
+import { SupabaseService } from './services/supabase.service';
+import { TextProcessorService } from './services/text-processor.service';
+import { WordItem, SortOrder, DictStats } from './models/word.model';
 
 @Component({
   selector: 'app-root',
@@ -66,71 +13,160 @@ export class DictionaryService {
   styleUrl: './app.css'
 })
 export class App implements OnInit {
-  private dictService = inject(DictionaryService);
+  private supabase = inject(SupabaseService);
+  private tokenizer = inject(TextProcessorService);
 
   languages = [
-    { id: 'ru', name: 'Русский', file: 'dicts/freq_dict_ru.txt' },
-    { id: 'en', name: 'Английский', file: 'dicts/freq_dict_en.txt' },
-    { id: 'et', name: 'Эстонский', file: 'dicts/freq_dict_et.txt' }
+    { id: 'ru', name: 'Русский' },
+    { id: 'en', name: 'Английский' },
+    { id: 'et', name: 'Эстонский' }
+  ];
+
+  sources = [
+    { id: 'web', name: 'Википедия' },
+    { id: 'subs', name: 'Субтитры' }
   ];
 
   selectedLang = signal<string>('ru');
+  selectedSource = signal<string>('web');
+
   isLoading = signal<boolean>(false);
-  currentData = signal<DictData>({ items: [], totalTokens: 0, uniqueTypes: 0 });
-  searchQuery = signal<string>('');
-  
+  words = signal<WordItem[]>([]);
+  totalMatches = signal<number>(0);
+  stats = signal<DictStats>({ totalTokens: 0, uniqueWords: 0 });
+
+  searchPrefix = signal<string>('');
+  currentSort = signal<SortOrder>('freq-desc');
+
   currentPage = signal<number>(1);
   pageSize = signal<number>(50);
 
-  filteredItems = computed(() => {
-    const query = this.searchQuery().trim().toLowerCase();
-    const items = this.currentData().items;
-    if (!query) return items;
-    return items.filter(item => item.word.includes(query));
-  });
+  totalPages = computed(() => Math.ceil(this.totalMatches() / this.pageSize()) || 1);
 
-  paginatedItems = computed(() => {
-    const start = (this.currentPage() - 1) * this.pageSize();
-    return this.filteredItems().slice(start, start + this.pageSize());
-  });
+  showAddModal = signal<boolean>(false);
+  newWordInput = signal<string>('');
+  newText = signal<string>('');
 
-  totalPages = computed(() => {
-    return Math.ceil(this.filteredItems().length / this.pageSize()) || 1;
-  });
-
-  ngOnInit() {
-    this.selectLanguage('ru');
+  async ngOnInit() {
+    await this.refreshData();
   }
 
-  selectLanguage(langId: string) {
-    const lang = this.languages.find(l => l.id === langId);
-    if (!lang) return;
+  async selectLanguage(lang: string) {
+    this.selectedLang.set(lang);
+    this.currentPage.set(1);
+    this.searchPrefix.set('');
+    await this.refreshData();
+  }
 
-    this.selectedLang.set(langId);
+  async selectSource(src: string) {
+    this.selectedSource.set(src);
+    this.currentPage.set(1);
+    this.searchPrefix.set('');
+    await this.refreshData();
+  }
+
+  async refreshData() {
     this.isLoading.set(true);
-    this.currentPage.set(1);
-    this.searchQuery.set('');
-
-    this.dictService.loadDictionary(lang.file).subscribe({
-      next: (data) => {
-        this.currentData.set(data);
-        this.isLoading.set(false);
-      },
-      error: (err) => {
-        console.error('Ошибка загрузки словаря:', err);
-        this.isLoading.set(false);
-      }
-    });
+    try {
+      const [statsData, wordsData] = await Promise.all([
+        this.supabase.getStats(this.selectedLang(), this.selectedSource()),
+        this.supabase.getWords(
+          this.selectedLang(),
+          this.selectedSource(),
+          this.searchPrefix(),
+          this.currentSort(),
+          this.currentPage(),
+          this.pageSize()
+        )
+      ]);
+      this.stats.set(statsData);
+      this.words.set(wordsData.items);
+      this.totalMatches.set(wordsData.totalCount);
+    } finally {
+      this.isLoading.set(false);
+    }
   }
 
-  onSearchChange(val: string) {
-    this.searchQuery.set(val);
+  async onSearchChange(val: string) {
+    this.searchPrefix.set(val);
     this.currentPage.set(1);
+    await this.refreshData();
   }
 
-  setPage(page: number) {
+  async setSort(order: SortOrder) {
+    this.currentSort.set(order);
+    this.currentPage.set(1);
+    await this.refreshData();
+  }
+
+  async setPage(page: number) {
     if (page >= 1 && page <= this.totalPages()) {
       this.currentPage.set(page);
+      await this.refreshData();
     }
+  }
+
+  async handleAddWord() {
+    const raw = this.newWordInput().trim().toLowerCase();
+    if (!raw) return;
+
+    const tokens = this.tokenizer.tokenize(raw, this.selectedLang());
+    if (!tokens.length) {
+      alert('Недопустимые символы для языка!');
+      return;
+    }
+    const cleanWord = tokens[0];
+
+    try {
+      await this.supabase.addWord(this.selectedLang(), this.selectedSource(), cleanWord);
+      this.newWordInput.set('');
+      this.showAddModal.set(false);
+      await this.refreshData();
+    } catch (e) {
+      alert(`Слово "${cleanWord}" уже есть в словаре!`);
+    }
+  }
+
+  async handleEditWord(item: WordItem) {
+    const input = prompt(`Исправление слова "${item.word}".\nВведите правильное написание:`, item.word);
+    if (!input) return;
+
+    const tokens = this.tokenizer.tokenize(input, this.selectedLang());
+    if (!tokens.length) return;
+    const target = tokens[0];
+    if (target === item.word) return;
+
+    this.isLoading.set(true);
+    await this.supabase.editAndMerge(this.selectedLang(), this.selectedSource(), item.word, target);
+    await this.refreshData();
+  }
+
+  async handleDeleteWord(item: WordItem) {
+    const ok = confirm(`ВНИМАНИЕ! Удалить слово "${item.word}" (частота: ${item.count})?`);
+    if (!ok) return;
+
+    this.isLoading.set(true);
+    await this.supabase.deleteWord(this.selectedLang(), this.selectedSource(), item.word);
+    await this.refreshData();
+  }
+
+  async handleAddText() {
+    const text = this.newText().trim();
+    if (!text) return;
+
+    const tokens = this.tokenizer.tokenize(text, this.selectedLang());
+    if (!tokens.length) {
+      alert('Нет подходящих слов в тексте!');
+      return;
+    }
+
+    const counts: Record<string, number> = {};
+    for (const t of tokens) counts[t] = (counts[t] || 0) + 1;
+
+    this.isLoading.set(true);
+    await this.supabase.bulkIncrement(this.selectedLang(), this.selectedSource(), counts);
+    this.newText.set('');
+    await this.refreshData();
+    alert(`Добавлено ${tokens.length} словоупотреблений.`);
   }
 }
